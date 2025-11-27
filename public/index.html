@@ -1,62 +1,222 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="fr">
 <head>
   <meta charset="utf-8" />
-  <title>iNaturalistAPP — Swiss Observations Explorer</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Faune & Flore – Suisse</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Leaflet CSS -->
+  <link
+          rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""
+  />
+
+  <!-- App styles -->
   <link rel="stylesheet" href="/static/css/style.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
   <style>
-    /* Fallback minimal styles in case style.css fails */
-    :root { --gap: 16px; }
-    body { font-family: system-ui, Arial, sans-serif; margin: 0; color: #111; }
-    header { padding: 12px var(--gap); border-bottom: 1px solid #eee; display: grid; gap: 8px; }
-    header .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    input, button { font-size: 14px; padding: 6px 10px; }
-    #main { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); padding: var(--gap); }
-    .card { border: 1px solid #eee; border-radius: 10px; padding: 10px; background: #fff; }
-    #map { height: 70vh; border-radius: 10px; }
-    #annual, #seasonal { height: 32vh; }
-    @media (max-width: 980px) { #main { grid-template-columns: 1fr; } #map { height: 50vh; } }
+    /* Make the app fill the window */
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+
+    .app-shell {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    }
+
+    .app-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.4rem 0.8rem;
+      border-bottom: 1px solid #ddd;
+      background: #f9fafb;
+    }
+
+    .app-title h1 {
+      font-size: 1.1rem;
+      margin: 0;
+    }
+
+    .app-title p {
+      margin: 0;
+      font-size: 0.8rem;
+      color: #555;
+    }
+
+    .app-tools {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin: 0;
+    }
+
+    .tool-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      font-size: 0.75rem;
+    }
+
+    .tool-group label span {
+      font-weight: 600;
+    }
+
+    .tool-group input {
+      padding: 0.2rem 0.4rem;
+      font-size: 0.8rem;
+    }
+
+    .tool-buttons button {
+      margin-top: 0.8rem;
+      padding: 0.25rem 0.6rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
+    .status-group {
+      margin-top: 0.7rem;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+      font-size: 0.8rem;
+    }
+
+    .status-badge {
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      background: #e5e7eb;
+      font-size: 0.75rem;
+    }
+
+    .status-badge.success { background: #d1fae5; }
+    .status-badge.error { background: #fee2e2; }
+
+    .app-main {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+
+    .map-panel {
+      flex: 2;
+      min-width: 0;
+    }
+
+    .map-container {
+      width: 100%;
+      height: 100%;
+    }
+
+    .charts-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      border-left: 1px solid #ddd;
+      background: #fcfcfc;
+    }
+
+    .chart-card {
+      flex: 1;
+      min-height: 0;
+      padding: 0.4rem;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .chart-card h2 {
+      font-size: 0.9rem;
+      margin: 0 0 0.25rem 0;
+    }
+
+    .chart {
+      flex: 1;
+      min-height: 0;
+    }
+
+    /* Match viewer popup style */
+    .leaflet-popup-content {
+      font: 14px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    }
   </style>
-</head>
-<body>
-  <header>
-    <div><strong>iNaturalistAPP</strong> — Swiss observations explorer</div>
-    <div class="controls">
-      <label for="taxon">Taxon ID:</label>
-      <input id="taxon" placeholder="(empty = all)" />
-      <button id="load">Load trends</button>
-    </div>
-  </header>
 
-  <div id="main">
-    <div class="card">
-      <div id="map"></div>
-    </div>
-    <div>
-      <div class="card"><div id="annual"></div></div>
-      <div class="card" style="margin-top: var(--gap);"><div id="seasonal"></div></div>
-    </div>
-  </div>
-
-  <!-- Libraries -->
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <!-- Plotly for charts -->
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 
-  <!-- Quick map init -->
-  <script>
-    (function() {
-      const map = L.map('map').setView([46.8, 8.2], 7);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 18,
-        attribution: '&copy; OpenStreetMap contributors'
-      }).addTo(map);
-      // Later: replace with your own tiles served from /tiles/*
-    })();
-  </script>
+  <!-- Leaflet JS -->
+  <script
+          src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin=""
+  ></script>
 
-  <!-- App logic -->
-  <script src="/static/js/app.js"></script>
+  <!-- Gzip decoder -->
+  <script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"></script>
+
+  <!-- Main app -->
+  <script defer src="/static/js/app.js"></script>
+</head>
+<body>
+<div class="app-shell">
+  <!-- Top toolbar -->
+  <header class="app-header">
+    <div class="app-title">
+      <h1>Faune &amp; Flore – Suisse</h1>
+      <p>Explorateur d'observations iNaturalist</p>
+    </div>
+
+    <form class="app-tools" id="controls">
+      <div class="tool-group">
+        <label for="taxon-id-input">
+          <span>Taxon ID</span>
+          <small>(vide = tous)</small>
+        </label>
+        <input
+                id="taxon-id-input"
+                type="text"
+                placeholder="ex: 123456"
+                autocomplete="off"
+        />
+      </div>
+
+      <div class="tool-group tool-buttons">
+        <button id="load-trends-btn" type="submit">
+          Charger tendances
+        </button>
+      </div>
+
+      <div class="tool-group status-group">
+        <span class="status-label">Statut :</span>
+        <span id="status-message" class="status-badge">OK</span>
+      </div>
+    </form>
+  </header>
+
+  <!-- Main area: map + charts -->
+  <main class="app-main">
+    <section class="map-panel">
+      <div id="map" class="map-container"></div>
+    </section>
+
+    <section class="charts-panel">
+      <div class="chart-card">
+        <h2>Évolution annuelle</h2>
+        <div id="annual-chart" class="chart"></div>
+      </div>
+
+      <div class="chart-card">
+        <h2>Évolution saisonnière</h2>
+        <div id="seasonal-chart" class="chart"></div>
+      </div>
+    </section>
+  </main>
+</div>
 </body>
 </html>
