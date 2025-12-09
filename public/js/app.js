@@ -4,6 +4,7 @@
 
 let mapInstance = null;
 let currentTaxonFilter = null; // number or null
+let clusterGroup = null;
 
 // Tile config (matches your Python tiler)
 const TILE_URL_TEMPLATE = "/tiles/{z}/{x}/{y}.geojson.gz";
@@ -204,19 +205,29 @@ function visibleTiles(z) {
 
 function clearAllTiles() {
   for (const [, layer] of activeTileLayers.entries()) {
-    mapInstance.removeLayer(layer);
+    if (clusterGroup) {
+      clusterGroup.removeLayer(layer);
+    } else if (mapInstance) {
+      mapInstance.removeLayer(layer);
+    }
   }
   activeTileLayers.clear();
 }
 
+
 function unloadTilesNotVisible(visibleSet) {
   for (const [key, layer] of activeTileLayers.entries()) {
     if (!visibleSet.has(key)) {
-      mapInstance.removeLayer(layer);
+      if (clusterGroup) {
+        clusterGroup.removeLayer(layer);
+      } else if (mapInstance) {
+        mapInstance.removeLayer(layer);
+      }
       activeTileLayers.delete(key);
     }
   }
 }
+
 
 async function loadTile(z, x, y) {
   const key = zxyKey(z, x, y);
@@ -247,6 +258,7 @@ async function loadTile(z, x, y) {
       }
     }
 
+    // create a GeoJSON layer for this tile
     const layer = L.geoJSON(geojson, {
       pointToLayer: (feat, latlng) => {
         return L.circleMarker(latlng, {
@@ -276,9 +288,19 @@ async function loadTile(z, x, y) {
             `Taxon ${taxon} • ${p.quality_grade || "—"}`
         );
       },
-    }).addTo(mapInstance);
+    });
 
+// instead of adding directly to map, add to the global cluster group
+    if (clusterGroup) {
+      clusterGroup.addLayer(layer);
+    } else {
+      // fallback, shouldn't really happen
+      layer.addTo(mapInstance);
+    }
+
+// remember tile -> layer mapping so we can remove later
     activeTileLayers.set(key, layer);
+
   } catch (_e) {
     // ignore broken tiles for now
   }
@@ -318,11 +340,22 @@ function initMap() {
     attribution: "&copy; OpenStreetMap",
   }).addTo(mapInstance);
 
+  // --- create global MarkerCluster group ---
+  clusterGroup = L.markerClusterGroup({
+    maxClusterRadius: 40,          // how "tight" clusters are
+    disableClusteringAtZoom: 11,   // at high zoom show individual points
+    spiderfyOnEveryZoom: false,
+    showCoverageOnHover: false,
+  });
+  mapInstance.addLayer(clusterGroup);
+  // -----------------------------------------
+
   mapInstance.on("moveend zoomend", updateTiles);
   updateTiles();
 
   return mapInstance;
 }
+
 
 
 // =====================

@@ -157,11 +157,24 @@
           crossorigin=""
   ></script>
 
+  <!-- MarkerCluster plugin -->
+  <link
+          rel="stylesheet"
+          href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+  />
+  <link
+          rel="stylesheet"
+          href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+  />
+  <script
+          src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js">
+  </script>
+
   <!-- Gzip decoder -->
   <script src="https://unpkg.com/pako@2.1.0/dist/pako.min.js"></script>
 
   <!-- Main app -->
-  <script defer src="/static/js/app.js"></script>
+  <script defer src="/js/app.js"></script>
 </head>
 <body>
 <div class="app-shell">
