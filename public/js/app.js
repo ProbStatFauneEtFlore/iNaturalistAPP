@@ -4,6 +4,9 @@
 
 let mapInstance = null;
 let currentTaxonFilter = null; // number or null
+let ecosystemsLayer = null;
+let ecosystemsLoaded = false;
+
 
 // Tile config (matches your Python tiler)
 const TILE_URL_TEMPLATE = "/tiles/{z}/{x}/{y}.geojson.gz";
@@ -13,17 +16,140 @@ const TILE_MAX_Z = 12;
 // cache of active tile layers: key = "z/x/y" -> L.GeoJSON layer
 const activeTileLayers = new Map();
 
+// Reuse one canvas renderer for ALL point layers (avoid per-tile renderer allocations)
+const pointRenderer = L.canvas({ padding: 0.5 });
+
+// Abort in-flight requests when tiles become irrelevant
+const tileRequests = new Map(); // key -> AbortController
+
+// Debounce helper (reduces tile-load storms)
+function debounce(fn, ms) {
+    let t = null;
+    return (...args) => {
+        clearTimeout(t);
+        t = setTimeout(() => fn(...args), ms);
+    };
+}
+
+
 
 // =====================
 // Helpers
 // =====================
 
+function getDisplayMode() {
+    const el = document.getElementById("display-mode");
+    return el ? el.value : "points";
+}
+
+function readFilters() {
+    const taxonRaw = (document.getElementById("taxon-id-input")?.value || "").trim();
+    const taxonId = taxonRaw === "" ? null : Number(taxonRaw);
+
+    const yearFromRaw = (document.getElementById("year-from")?.value || "").trim();
+    const yearToRaw   = (document.getElementById("year-to")?.value || "").trim();
+    const yearFrom = yearFromRaw === "" ? null : Number(yearFromRaw);
+    const yearTo   = yearToRaw === "" ? null : Number(yearToRaw);
+
+    const quality = (document.getElementById("quality-grade")?.value || "").trim() || null;
+
+    const limitRaw = (document.getElementById("max-points")?.value || "").trim();
+    const limit = limitRaw === "" ? null : Number(limitRaw);
+
+    return {
+        taxonId: Number.isFinite(taxonId) ? taxonId : null,
+        yearFrom: Number.isFinite(yearFrom) ? yearFrom : null,
+        yearTo: Number.isFinite(yearTo) ? yearTo : null,
+        quality,
+        limit: Number.isFinite(limit) ? limit : null,
+    };
+}
+
+
 function setStatus(message, type = "") {
-  const el = document.getElementById("status-message");
-  if (!el) return;
-  el.textContent = message || "";
-  el.classList.remove("error", "success");
-  if (type) el.classList.add(type);
+    const el = document.getElementById("status-message");
+    if (!el) return;
+
+    // handle new status pill structure: <span id="status-message"><span class="status-text">...</span></span>
+    const textEl = el.querySelector(".status-text");
+
+    if (textEl) {
+        textEl.textContent = message || "";
+    } else {
+        el.textContent = message || "";
+    }
+
+    el.classList.remove("error", "success");
+    if (type) el.classList.add(type);
+}
+
+async function ensureEcosystemsLayer() {
+    if (ecosystemsLoaded) return;
+
+    try {
+        const resp = await fetch("/api/ecosystems");
+        if (!resp.ok) {
+            console.warn("Ecosystems endpoint not available:", resp.status);
+            ecosystemsLoaded = true; // avoid hammering the server
+            return;
+        }
+
+        const geojson = await resp.json();
+
+        ecosystemsLayer = L.geoJSON(geojson, {
+            style: () => ({
+                weight: 1,
+                fillOpacity: 0.25,
+            }),
+            onEachFeature: (feat, layer) => {
+                const p = feat.properties || {};
+                // properties naming differs depending on your pipeline — we keep it robust
+                const clusterId = p.cluster_id ?? p.cluster ?? p.id ?? "—";
+                const count = p.count ?? p.n ?? p.observations ?? "—";
+
+                layer.bindPopup(
+                    `<b>Écosystème</b><br>` +
+                    `Cluster: ${clusterId}<br>` +
+                    `Observations: ${count}`
+                );
+            },
+        });
+
+        ecosystemsLoaded = true;
+    } catch (e) {
+        console.error(e);
+        ecosystemsLoaded = true;
+    }
+}
+
+async function applyDisplayMode(mode) {
+    if (!mapInstance) return;
+
+    // Remove ecosystems overlay if present (we may re-add it)
+    if (ecosystemsLayer && mapInstance.hasLayer(ecosystemsLayer)) {
+        mapInstance.removeLayer(ecosystemsLayer);
+    }
+
+    if (mode === "points") {
+        // show only points tiles
+        clearAllTiles();
+        updateTiles();
+        return;
+    }
+
+    if (mode === "ecosystems") {
+        // show only ecosystems polygons
+        clearAllTiles();
+        await ensureEcosystemsLayer();
+        if (ecosystemsLayer) ecosystemsLayer.addTo(mapInstance);
+        return;
+    }
+
+    // both
+    clearAllTiles();
+    updateTiles();
+    await ensureEcosystemsLayer();
+    if (ecosystemsLayer) ecosystemsLayer.addTo(mapInstance);
 }
 
 function extractXY(data, xKey, yKey) {
@@ -149,11 +275,16 @@ async function loadTrends() {
       currentTaxonFilter = Number.isFinite(n) ? n : null;
     }
 
-    // reset tiles when filter changes
-    clearAllTiles();
-    updateTiles();
 
-    setStatus("OK", "success");
+      // Only refresh point tiles if they are part of the active display mode
+      const mode = getDisplayMode();
+      if (mode === "points" || mode === "both") {
+          clearAllTiles();
+          updateTiles();
+      }
+
+
+      setStatus("OK", "success");
   } catch (err) {
     console.error(err);
     setStatus("Erreur lors du chargement des tendances", "error");
@@ -203,86 +334,98 @@ function visibleTiles(z) {
 }
 
 function clearAllTiles() {
-  for (const [, layer] of activeTileLayers.entries()) {
-    mapInstance.removeLayer(layer);
-  }
-  activeTileLayers.clear();
+    // remove layers
+    for (const [, layer] of activeTileLayers.entries()) {
+        mapInstance.removeLayer(layer);
+    }
+    activeTileLayers.clear();
+
+    // abort in-flight requests
+    for (const [, controller] of tileRequests.entries()) {
+        controller.abort();
+    }
+    tileRequests.clear();
 }
+
 
 function unloadTilesNotVisible(visibleSet) {
-  for (const [key, layer] of activeTileLayers.entries()) {
-    if (!visibleSet.has(key)) {
-      mapInstance.removeLayer(layer);
-      activeTileLayers.delete(key);
+    for (const [key, layer] of activeTileLayers.entries()) {
+        if (!visibleSet.has(key)) {
+            mapInstance.removeLayer(layer);
+            activeTileLayers.delete(key);
+        }
     }
-  }
+
+    // Abort downloads for tiles that are no longer needed
+    for (const [key, controller] of tileRequests.entries()) {
+        if (!visibleSet.has(key)) {
+            controller.abort();
+            tileRequests.delete(key);
+        }
+    }
 }
+
 
 async function loadTile(z, x, y) {
-  const key = zxyKey(z, x, y);
-  if (activeTileLayers.has(key)) return;
+    const key = zxyKey(z, x, y);
+    if (activeTileLayers.has(key)) return;
+    if (tileRequests.has(key)) return; // already fetching
 
-  const url = TILE_URL_TEMPLATE
-      .replace("{z}", z)
-      .replace("{x}", x)
-      .replace("{y}", y);
+    const url = TILE_URL_TEMPLATE
+        .replace("{z}", z)
+        .replace("{x}", x)
+        .replace("{y}", y);
 
-  try {
-    const resp = await fetch(url);
-    if (!resp.ok) return; // tile not present
-    const buf = await resp.arrayBuffer();
-    const ungz = pako.ungzip(new Uint8Array(buf), { to: "string" });
-    const gj = JSON.parse(ungz);
+    const controller = new AbortController();
+    tileRequests.set(key, controller);
 
-    // optional filter by taxon_id at load time
-    let geojson = gj;
-    if (currentTaxonFilter !== null) {
-      const n = Number(currentTaxonFilter);
-      if (Number.isFinite(n)) {
-        const feats = (gj.features || []).filter((f) => {
-          const t = Number(f?.properties?.taxon_id);
-          return Number.isFinite(t) && t === n;
-        });
-        geojson = { type: "FeatureCollection", features: feats };
-      }
+    try {
+        const resp = await fetch(url, { signal: controller.signal });
+        if (!resp.ok) return; // tile not present
+        const buf = await resp.arrayBuffer();
+
+        // If aborted after download, stop
+        if (controller.signal.aborted) return;
+
+        const ungz = pako.ungzip(new Uint8Array(buf), { to: "string" });
+        const gj = JSON.parse(ungz);
+
+        // optional filter by taxon_id at load time
+        let geojson = gj;
+        if (currentTaxonFilter !== null) {
+            const n = Number(currentTaxonFilter);
+            if (Number.isFinite(n)) {
+                const feats = (gj.features || []).filter((f) => {
+                    const t = Number(f?.properties?.taxon_id);
+                    return Number.isFinite(t) && t === n;
+                });
+                geojson = { type: "FeatureCollection", features: feats };
+            }
+        }
+
+        // Create Leaflet layer (points only, non-interactive) using a SHARED renderer
+        const layer = L.geoJSON(geojson, {
+            interactive: false,
+            pointToLayer: (_feat, latlng) =>
+                L.circleMarker(latlng, {
+                    renderer: pointRenderer,
+                    radius: 2.0,      // slightly smaller = faster
+                    weight: 0,
+                    fillOpacity: 0.65,
+                }),
+        }).addTo(mapInstance);
+
+        activeTileLayers.set(key, layer);
+    } catch (e) {
+        if (e.name !== "AbortError") {
+            // keep quiet in production; log if you want
+            // console.error(e);
+        }
+    } finally {
+        tileRequests.delete(key);
     }
-
-    const layer = L.geoJSON(geojson, {
-      pointToLayer: (feat, latlng) => {
-        return L.circleMarker(latlng, {
-          radius: 3,
-          weight: 0,
-          fillOpacity: 0.7,
-        });
-      },
-      onEachFeature: (feat, layer) => {
-        const p = feat.properties || {};
-        const taxon = p.taxon_id ?? "—";
-        const link =
-            taxon && taxon !== "—"
-                ? `<br><a href="https://www.inaturalist.org/taxa/${taxon}" target="_blank" rel="noopener">View on iNaturalist</a>`
-                : "";
-
-        layer.bindPopup(
-            `<b>Observation:</b> ${p.observation_uuid || "—"}<br>` +
-            `Taxon ID: ${taxon || "—"}${link}<br>` +
-            `Quality: ${p.quality_grade || "—"}<br>` +
-            `Observed on: ${p.observed_on || "—"}<br>` +
-            `Observer ID: ${p.observer_id || "—"}<br>` +
-            `Positional accuracy: ${p.positional_accuracy || "—"} m`
-        );
-
-        layer.bindTooltip(
-            `Taxon ${taxon} • ${p.quality_grade || "—"}`
-        );
-      },
-    }).addTo(mapInstance);
-
-    activeTileLayers.set(key, layer);
-  } catch (_e) {
-    // ignore broken tiles for now
-  }
 }
+
 
 
 function updateTiles() {
@@ -297,6 +440,9 @@ function updateTiles() {
   unloadTilesNotVisible(visibleSet);
   tiles.forEach(([zz, xx, yy]) => loadTile(zz, xx, yy));
 }
+
+const updateTilesDebounced = debounce(updateTiles, 120);
+
 
 
 // =====================
@@ -318,7 +464,7 @@ function initMap() {
     attribution: "&copy; OpenStreetMap",
   }).addTo(mapInstance);
 
-  mapInstance.on("moveend zoomend", updateTiles);
+    mapInstance.on("moveend zoomend", updateTilesDebounced);
   updateTiles();
 
   return mapInstance;
@@ -331,6 +477,16 @@ function initMap() {
 
 document.addEventListener("DOMContentLoaded", () => {
   initMap();
+
+    const displaySelect = document.getElementById("display-mode");
+    if (displaySelect) {
+        displaySelect.addEventListener("change", () => {
+            applyDisplayMode(displaySelect.value);
+        });
+
+        // apply initial mode
+        applyDisplayMode(displaySelect.value);
+    }
 
   const btn = document.getElementById("load-trends-btn");
   if (btn) {
