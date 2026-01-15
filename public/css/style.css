@@ -305,6 +305,43 @@ body {
     margin: 10px 12px;
 }
 
+/* Summary card */
+.summary-grid{
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+}
+
+.summary-row{
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    background: rgba(17,24,39,0.04);
+    border: 1px solid rgba(17,24,39,0.06);
+}
+
+.summary-row span{
+    font-size: 0.86rem;
+    color: rgba(17,24,39,0.74);
+    font-weight: 650;
+}
+
+.summary-row strong{
+    font-size: 0.92rem;
+    color: #111827;
+    font-variant-numeric: tabular-nums;
+    font-weight: 800;
+}
+
+/* Make room for summary + 2 charts */
+.charts{
+    grid-template-rows: auto 1fr 1fr; /* CHANGED from 1fr 1fr */
+}
+
+
 /* =========================================================
    Responsiveness
    ========================================================= */

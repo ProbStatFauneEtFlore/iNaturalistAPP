@@ -257,12 +257,14 @@
         /* Charts */
         .charts{
             display: grid;
-            grid-template-rows: 1fr 1fr;
+            grid-template-rows: auto 1fr 1fr; /* summary + 2 charts */
             gap: 12px;
             padding: 12px;
             min-height: 0;
             background: rgba(255,255,255,0.94);
+            overflow: auto; /* important: allow scrolling if panel is short */
         }
+
 
         .chart-card{
             border-radius: 12px;
@@ -356,10 +358,14 @@
                     Affichage <small>couches</small>
                 </label>
                 <select id="display-mode">
-                    <option value="points" selected>Points</option>
+                    <option value="grid" selected>Grille</option>
+                    <option value="points">Points</option>
                     <option value="ecosystems">Écosystèmes</option>
                     <option value="both">Les deux</option>
                 </select>
+
+
+
             </div>
 
             <div class="actions">
@@ -399,6 +405,23 @@
             </div>
 
             <div class="charts">
+                <div class="chart-card" id="summary-card">
+                    <div class="chart-title">
+                        <h3>Résumé (zone visible)</h3>
+                        <p>Statistiques calculées sur la bbox affichée</p>
+                    </div>
+
+                    <div id="summary-content" class="summary-grid">
+                        <div class="summary-row"><span>Observations</span><strong id="m-observations">—</strong></div>
+                        <div class="summary-row"><span>Taxons uniques</span><strong id="m-unique_taxa">—</strong></div>
+                        <div class="summary-row"><span>Clusters</span><strong id="m-clusters">—</strong></div>
+                        <div class="summary-row"><span>Altitude min</span><strong id="m-elevation_min">—</strong></div>
+                        <div class="summary-row"><span>Altitude moyenne</span><strong id="m-elevation_mean">—</strong></div>
+                        <div class="summary-row"><span>Altitude max</span><strong id="m-elevation_max">—</strong></div>
+                    </div>
+                </div>
+
+
                 <div class="chart-card">
                     <div class="chart-title">
                         <h3>Évolution annuelle</h3>

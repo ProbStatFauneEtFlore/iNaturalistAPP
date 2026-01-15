@@ -358,7 +358,7 @@ function setup_api_routes()
             ))
         end
 
-        return result
+        return respond_json(result)
     end
 
 
@@ -452,7 +452,7 @@ function setup_api_routes()
             push!(metrics, Dict("metric" => "elevation_max", "value" => maximum(df.elevation_m)))
         end
 
-        return metrics
+        return respond_json(metrics)
     end
 
 
