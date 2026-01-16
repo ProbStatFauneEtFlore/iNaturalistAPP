@@ -185,13 +185,20 @@ function renderAnnualWithFits(data) {
         hovertemplate: "Année %{x}<br>Observations %{y}<extra></extra>",
     };
 
+    const maxYear = x.length ? Math.max(...x) : 2024;
+
     Plotly.newPlot("annual-chart", [trace], {
         title: { text: "Évolution annuelle", font: { size: 14 } },
         margin: { l: 40, r: 10, t: 30, b: 40 },
-        xaxis: { title: "Année" },
+        xaxis: {
+            title: "Année",
+            range: [2010, maxYear],   // <-- starts at 2010
+            autorange: false
+        },
         yaxis: { title: "Nombre d'observations" },
     }, { displaylogo: false, responsive: true });
 }
+
 
 function renderNormalized(data) {
     // Depending on your backend, keys might be year + value, or year + count_norm, etc.
