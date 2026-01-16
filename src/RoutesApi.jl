@@ -3,140 +3,205 @@ module RoutesApi
 using Genie, Genie.Router
 using Genie.Requests
 using DataFrames
-using ..Data: OBS
-using ..Data: data_path
-using ..Util: respond_json
 using HTTP
 using Dates
 using Statistics
 using JSON3
 
-# ---------------- Helpers ----------------
-
-function get_int_param(name::AbstractString, default::Int)
-    p = params()
-    v = get(p, name, "")
-    isempty(v) && return default
-    try
-        parse(Int, v)
-    catch
-        default
-    end
-end
-
-function get_string_param(name::AbstractString, default::AbstractString = "")
-    get(params(), name, default)
-end
+using ..Data: OBS, data_path
+using ..Util: respond_json
 
 export setup_api_routes
 
-function parse_filters(p)
+# =========================
+# Params helpers (robust)
+# =========================
+
+@inline function pget(p, key::AbstractString, default=nothing)
+    if haskey(p, key)
+        return p[key]
+    end
+    sk = Symbol(key)
+    if haskey(p, sk)
+        return p[sk]
+    end
+    return default
+end
+
+@inline function phaskey(p, key::AbstractString)::Bool
+    return haskey(p, key) || haskey(p, Symbol(key))
+end
+
+@inline function to_int(x; default=nothing)
+    x === nothing && return default
+    s = strip(string(x))
+    isempty(s) && return default
+    v = tryparse(Int, s)
+    v === nothing ? default : v
+end
+
+@inline function to_float(x; default=nothing)
+    x === nothing && return default
+    s = strip(string(x))
+    isempty(s) && return default
+    v = tryparse(Float64, s)
+    v === nothing ? default : v
+end
+
+@inline function error_json(code::Int, msg::AbstractString)
+    return HTTP.Response(code, ["Content-Type" => "application/json; charset=utf-8"],
+        JSON3.write(Dict("error" => msg)))
+end
+
+# =========================
+# Filters
+# =========================
+
+"""
+Parse query params into a Dict{Symbol,Any}.
+
+Supported:
+- taxon_id (Int)
+- year_from (Int)
+- year_to (Int)
+- month (one or multiple)
+- quality_grade (String)
+- elevation_min/max (Float64)
+- bbox (lon1,lat1,lon2,lat2)
+- limit (Int, clamped)
+- sample ("random")
+"""
+function parse_filters(p)::Dict{Symbol,Any}
     f = Dict{Symbol,Any}()
 
+    # taxon
     if phaskey(p, "taxon_id")
-        f[:taxon_id] = tryparse(Int, string(pget(p, "taxon_id", "")))
+        f[:taxon_id] = to_int(pget(p, "taxon_id"); default=nothing)
     end
 
+    # year range
     if phaskey(p, "year_from")
-        f[:year_from] = tryparse(Int, string(pget(p, "year_from", "")))
+        f[:year_from] = to_int(pget(p, "year_from"); default=nothing)
     end
-
     if phaskey(p, "year_to")
-        f[:year_to] = tryparse(Int, string(pget(p, "year_to", "")))
+        f[:year_to] = to_int(pget(p, "year_to"); default=nothing)
     end
 
+    # months: month=1&month=2 OR month=1
     if phaskey(p, "month")
         raw = pget(p, "month")
-        months = raw isa Vector ? raw : [raw]
-        f[:months] = parse.(Int, string.(months))
+        months_raw = raw isa Vector ? raw : [raw]
+        months = Int[]
+        for m in months_raw
+            mi = to_int(m; default=nothing)
+            mi === nothing && continue
+            1 <= mi <= 12 || continue
+            push!(months, mi)
+        end
+        !isempty(months) && (f[:months] = months)
     end
 
+    # quality
     if phaskey(p, "quality_grade")
-        f[:quality] = string(pget(p, "quality_grade"))
+        q = strip(string(pget(p, "quality_grade", "")))
+        !isempty(q) && (f[:quality] = q)
     end
 
+    # elevation
     if phaskey(p, "elevation_min")
-        f[:elev_min] = tryparse(Float64, string(pget(p, "elevation_min", "")))
+        f[:elev_min] = to_float(pget(p, "elevation_min"); default=nothing)
     end
-
     if phaskey(p, "elevation_max")
-        f[:elev_max] = tryparse(Float64, string(pget(p, "elevation_max", "")))
+        f[:elev_max] = to_float(pget(p, "elevation_max"); default=nothing)
     end
 
+    # bbox (stored normalized as (lon_min, lat_min, lon_max, lat_max))
     if phaskey(p, "bbox")
-        vals = split(string(pget(p, "bbox")), ",")
+        vals = split(strip(string(pget(p, "bbox", ""))), ",")
         if length(vals) == 4
-            f[:bbox] = parse.(Float64, vals)
+            a = to_float(vals[1]; default=nothing)
+            b = to_float(vals[2]; default=nothing)
+            c = to_float(vals[3]; default=nothing)
+            d = to_float(vals[4]; default=nothing)
+            if a !== nothing && b !== nothing && c !== nothing && d !== nothing
+                lon_min, lon_max = min(a, c), max(a, c)
+                lat_min, lat_max = min(b, d), max(b, d)
+                f[:bbox] = (lon_min, lat_min, lon_max, lat_max)
+            end
         end
     end
 
-    if phaskey(p, "limit")
-        lim = something(tryparse(Int, string(pget(p, "limit", ""))), 100_000)
-        f[:limit] = min(lim, 100_000)
-    else
-        f[:limit] = 100_000
-    end
+    # limit
+    lim = phaskey(p, "limit") ? to_int(pget(p, "limit"); default=100_000) : 100_000
+    lim = lim === nothing ? 100_000 : lim
+    f[:limit] = clamp(lim, 1, 100_000)
 
+    # sample
     if phaskey(p, "sample")
-        f[:sample] = string(pget(p, "sample"))
+        s = strip(string(pget(p, "sample", "")))
+        !isempty(s) && (f[:sample] = s)
     end
 
     return f
 end
 
+@inline asboolmask(v) = coalesce.(v, false)
 
-function apply_filters(df, f)
+"""
+Apply filters to DataFrame safely (handles missing in columns).
+
+Important: every boolean mask is coalesced to `false` for missing entries.
+"""
+function apply_filters(df::DataFrame, f::Dict{Symbol,Any})::DataFrame
     out = df
 
-    if haskey(f, :taxon_id) && f[:taxon_id] !== nothing
-        out = out[out.taxon_id .== f[:taxon_id], :]
+    if get(f, :taxon_id, nothing) !== nothing
+        out = out[asboolmask(out.taxon_id .== f[:taxon_id]), :]
     end
 
-    if haskey(f, :year_from) && f[:year_from] !== nothing
-        out = out[out.year .>= f[:year_from], :]
+    if get(f, :year_from, nothing) !== nothing
+        out = out[asboolmask(out.year .>= f[:year_from]), :]
     end
 
-    if haskey(f, :year_to) && f[:year_to] !== nothing
-        out = out[out.year .<= f[:year_to], :]
+    if get(f, :year_to, nothing) !== nothing
+        out = out[asboolmask(out.year .<= f[:year_to]), :]
     end
 
     if haskey(f, :months)
-        out = out[in.(out.month, Ref(f[:months])), :]
+        out = out[asboolmask(in.(out.month, Ref(f[:months]))), :]
     end
 
     if haskey(f, :quality)
-        out = out[out.quality_grade .== f[:quality], :]
+        out = out[asboolmask(out.quality_grade .== f[:quality]), :]
     end
 
-    if haskey(f, :elev_min) && f[:elev_min] !== nothing
-        out = out[out.elevation_m .>= f[:elev_min], :]
+    if get(f, :elev_min, nothing) !== nothing
+        out = out[asboolmask(out.elevation_m .>= f[:elev_min]), :]
     end
 
-    if haskey(f, :elev_max) && f[:elev_max] !== nothing
-        out = out[out.elevation_m .<= f[:elev_max], :]
+    if get(f, :elev_max, nothing) !== nothing
+        out = out[asboolmask(out.elevation_m .<= f[:elev_max]), :]
     end
 
     if haskey(f, :bbox)
-        lon1, lat1, lon2, lat2 = f[:bbox]
-        lo = min(lon1, lon2)
-        hi = max(lon1, lon2)
-        la = min(lat1, lat2)
-        lb = max(lat1, lat2)
-
-        out = out[
-            (out.longitude .>= lo) .&
-            (out.longitude .<= hi) .&
-            (out.latitude  .>= la) .&
-            (out.latitude  .<= lb),
-            :
-        ]
+        lon_min, lat_min, lon_max, lat_max = f[:bbox]
+        mask =
+            (out.longitude .>= lon_min) .&
+            (out.longitude .<= lon_max) .&
+            (out.latitude  .>= lat_min) .&
+            (out.latitude  .<= lat_max)
+        out = out[asboolmask(mask), :]
     end
 
-    if haskey(f, :sample) && f[:sample] == "random"
+    # sampling (optional)
+    if get(f, :sample, nothing) == "random"
         n = min(nrow(out), f[:limit])
-        out = out[rand(1:nrow(out), n), :]
+        if n > 0
+            out = out[rand(1:nrow(out), n), :]
+        end
     end
 
+    # limit (always)
     if nrow(out) > f[:limit]
         out = out[1:f[:limit], :]
     end
@@ -144,7 +209,9 @@ function apply_filters(df, f)
     return out
 end
 
-
+# =========================
+# Ecosystems helpers
+# =========================
 
 function list_cluster_runs()::Vector{String}
     clusters_root = data_path("data", "clusters")
@@ -162,17 +229,12 @@ end
 
 function pick_best_geojson_4326(run_dir::AbstractString)::Union{String,Nothing}
     files = readdir(run_dir)
-    # Prefer *_4326.geojson for Leaflet
-    candidates = filter(f -> endswith(lowercase(f), "_4326.geojson"), files)
+    candidates = filter(f -> endswith(lowercase(f), "_total_4326.geojson"), files)
     if isempty(candidates)
         candidates = filter(f -> endswith(lowercase(f), ".geojson"), files)
     end
     isempty(candidates) ? nothing : joinpath(run_dir, first(candidates))
 end
-
-# -------------------------
-# Geometry bbox utilities
-# -------------------------
 
 # returns (minLon, minLat, maxLon, maxLat)
 function coords_bbox(coords)
@@ -193,36 +255,23 @@ function coords_bbox(coords)
     end
 
     visit(coords)
-
     return (minLon, minLat, maxLon, maxLat)
 end
 
 function feature_bbox(feature)::Union{NTuple{4,Float64},Nothing}
     geom = get(feature, "geometry", nothing)
     geom === nothing && return nothing
-
     coords = get(geom, "coordinates", nothing)
     coords === nothing && return nothing
 
     b = coords_bbox(coords)
-    if !all(isfinite, b)
-        return nothing
-    end
-    return b
+    all(isfinite, b) ? b : nothing
 end
 
-# bbox intersection test
-# a = (minLon, minLat, maxLon, maxLat)
-# b = (minLon, minLat, maxLon, maxLat)
 @inline function bbox_intersects(a, b)::Bool
     return !(a[3] < b[1] || a[1] > b[3] || a[4] < b[2] || a[2] > b[4])
 end
 
-# -------------------------
-# Ecosystems cache
-# -------------------------
-
-# Cache parsed GeoJSON + per-feature bbox list, per run
 const ECOSYSTEMS_CACHE = Dict{String, Any}()
 
 function load_ecosystems_cached(run::String)
@@ -235,11 +284,9 @@ function load_ecosystems_cached(run::String)
     path = pick_best_geojson_4326(run_dir)
     path === nothing && return nothing
 
-    # Parse once
     obj = JSON3.read(open(read, path), Dict{String,Any})
     feats = get(obj, "features", Any[])
 
-    # Precompute bbox per feature (same ordering as feats)
     bboxes = Vector{Union{NTuple{4,Float64},Nothing}}(undef, length(feats))
     for i in eachindex(feats)
         bboxes[i] = feature_bbox(feats[i])
@@ -250,7 +297,9 @@ function load_ecosystems_cached(run::String)
     return data
 end
 
-# ---------------- Routes ----------------
+# =========================
+# Grid helpers
+# =========================
 
 @inline function lonlat_to_grid(lon::Float64, lat::Float64, z::Int)
     lat = clamp(lat, -85.05112878, 85.05112878)
@@ -261,70 +310,47 @@ end
     return x, y
 end
 
-# Robust GET for Genie params: works with String or Symbol keys
-@inline function pget(p, key::AbstractString, default=nothing)
-    if haskey(p, key)
-        return p[key]
-    end
-    sk = Symbol(key)
-    if haskey(p, sk)
-        return p[sk]
-    end
-    return default
-end
-
-@inline function phaskey(p, key::AbstractString)::Bool
-    return haskey(p, key) || haskey(p, Symbol(key))
-end
-
-
+# =========================
+# Routes
+# =========================
 
 function setup_api_routes()
 
-    # --- Species list (taxon + count) ---
     route("/api/species") do
         g = combine(groupby(OBS, :taxon_id), nrow => :count)
-        sort!(g, :count, rev = true)
-        respond_json(g[!, [:taxon_id, :count]])
+        sort!(g, :count, rev=true)
+        return respond_json(g[!, [:taxon_id, :count]])
     end
 
-    # --- Annual trends ---
     route("/api/trends/annual") do
-        p = params()
-        taxon = try
-            parse(Int, get(p, "taxon_id", "0"))
-        catch
-            0
-        end
-
-        sub = taxon == 0 ? OBS : OBS[OBS.taxon_id .== taxon, :]
-        g = combine(groupby(sub, :year), nrow => :count)
+        f = parse_filters(params())
+        df = apply_filters(OBS, f)
+        g = combine(groupby(df, :year), nrow => :count)
         sort!(g, :year)
-        respond_json(g)
+        return respond_json(g)
+    end
+
+    route("/api/trends/seasonal") do
+        f = parse_filters(params())
+        df = apply_filters(OBS, f)
+        g = combine(groupby(df, :month), nrow => :count)
+        sort!(g, :month)
+        return respond_json(g)
     end
 
     route("/api/grid") do
         p = params()
+        phaskey(p, "bbox") || return error_json(400, "bbox required")
 
-        phaskey(p, "bbox") || return HTTP.Response(400, "bbox required")
-        vals = split(string(pget(p, "bbox")), ",")
-
-
-
-        lon1, lat1, lon2, lat2 = parse.(Float64, vals)
-        bbox = (min(lon1, lon2), min(lat1, lat2), max(lon1, lon2), max(lat1, lat2))
-
-        z = something(tryparse(Int, string(pget(p, "z", ""))), 7)
+        z = to_int(pget(p, "z"); default=7)
         z = clamp(z, 4, 12)
 
         f = parse_filters(p)
         df = apply_filters(OBS, f)
 
-        # grid[(x,y)] => (count, Set(taxa), sum_elev)
         grid = Dict{Tuple{Int,Int}, Tuple{Int, Set{Int}, Float64}}()
 
         for r in eachrow(df)
-            # Skip incomplete rows (common in real datasets)
             if ismissing(r.longitude) || ismissing(r.latitude) || ismissing(r.taxon_id) || ismissing(r.elevation_m)
                 continue
             end
@@ -344,10 +370,8 @@ function setup_api_routes()
             end
         end
 
-
         result = Vector{Dict}()
         sizehint!(result, length(grid))
-
         for ((x, y), (count, taxa, esum)) in grid
             push!(result, Dict(
                 "x" => x,
@@ -361,8 +385,146 @@ function setup_api_routes()
         return respond_json(result)
     end
 
+    route("/api/summary") do
+        f = parse_filters(params())
+        df = apply_filters(OBS, f)
 
-    # --- Ecosystem polygons (latest run, EPSG:4326) ---
+        metrics = Vector{Dict}()
+        push!(metrics, Dict("metric" => "observations", "value" => nrow(df)))
+        push!(metrics, Dict("metric" => "unique_taxa", "value" => length(unique(skipmissing(df.taxon_id)))))
+        push!(metrics, Dict("metric" => "clusters", "value" => length(unique(skipmissing(df.cluster_id)))))
+
+        if :elevation_m in names(df) && nrow(df) > 0
+            em = collect(skipmissing(df.elevation_m))
+            if !isempty(em)
+                push!(metrics, Dict("metric" => "elevation_min", "value" => minimum(em)))
+                push!(metrics, Dict("metric" => "elevation_mean", "value" => mean(em)))
+                push!(metrics, Dict("metric" => "elevation_max", "value" => maximum(em)))
+            end
+        end
+
+        return respond_json(metrics)
+    end
+
+    # ---- plots: all require bbox ----
+    function require_bbox!(f)
+        haskey(f, :bbox) || throw(ArgumentError("bbox required"))
+    end
+
+    route("/api/plots/annual") do
+        f = parse_filters(params())
+        haskey(f, :bbox) || return error_json(400, "bbox required")
+        df = apply_filters(OBS, f)
+
+        g = combine(groupby(df, :year), nrow => :count)
+        sort!(g, :year)
+        return respond_json(g)
+    end
+
+    route("/api/plots/annual_normalized") do
+        p = params()
+        f_all = parse_filters(p)
+        haskey(f_all, :bbox) || return error_json(400, "bbox required")
+
+        # total per year (all taxa) on viewport
+        df_all = apply_filters(OBS, f_all)
+        g_total = combine(groupby(df_all, :year), nrow => :total)
+        sort!(g_total, :year)
+
+        taxon = get(f_all, :taxon_id, nothing)
+        if taxon === nothing
+            out = DataFrame(year = g_total.year, value = fill(1.0, nrow(g_total)))
+            return respond_json(out)
+        end
+
+        # taxon per year on same viewport
+        f_tax = copy(f_all)
+        f_tax[:taxon_id] = taxon
+        df_tax = apply_filters(OBS, f_tax)
+        g_tax = combine(groupby(df_tax, :year), nrow => :taxon_count)
+        sort!(g_tax, :year)
+
+        g = leftjoin(g_total, g_tax, on=:year)
+        g.taxon_count = coalesce.(g.taxon_count, 0)
+
+        value = Vector{Float64}(undef, nrow(g))
+        @inbounds for i in 1:nrow(g)
+            value[i] = g.total[i] == 0 ? 0.0 : (g.taxon_count[i] / g.total[i])
+        end
+
+        out = DataFrame(year = g.year, value = value)
+        return respond_json(out)
+    end
+
+    route("/api/plots/monthly_yearly") do
+        f = parse_filters(params())
+        haskey(f, :bbox) || return error_json(400, "bbox required")
+        df = apply_filters(OBS, f)
+
+        g = combine(groupby(df, [:year, :month]), nrow => :count)
+
+        result = Vector{Any}(undef, 12)
+        for m in 1:12
+            sub = g[g.month .== m, :]
+            sort!(sub, :year)
+            result[m] = Dict("month" => m, "counts" => collect(Int.(sub.count)))
+        end
+
+        return respond_json(result)
+    end
+
+    route("/api/plots/month_hist") do
+        f = parse_filters(params())
+        haskey(f, :bbox) || return error_json(400, "bbox required")
+        df = apply_filters(OBS, f)
+
+        g = combine(groupby(df, :month), nrow => :count)
+        sort!(g, :month)
+
+        out = [Dict("month" => m, "count" => 0) for m in 1:12]
+        for r in eachrow(g)
+            if !ismissing(r.month)
+                m = Int(r.month)
+                1 <= m <= 12 || continue
+                out[m]["count"] = Int(r.count)
+            end
+        end
+
+        return respond_json(out)
+    end
+
+    route("/api/plots/season_profile") do
+        f = parse_filters(params())
+        haskey(f, :bbox) || return error_json(400, "bbox required")
+        df = apply_filters(OBS, f)
+
+        # build seasons from month, skipping missings
+        seasons = String[]
+        for m in df.month
+            ismissing(m) && continue
+            mi = Int(m)
+            push!(seasons,
+                (mi == 12 || mi == 1 || mi == 2) ? "Hiver" :
+                (3 <= mi <= 5) ? "Printemps" :
+                (6 <= mi <= 8) ? "Été" : "Automne"
+            )
+        end
+
+        df2 = DataFrame(season = seasons)
+        g = combine(groupby(df2, :season), nrow => :count)
+
+        order = ["Hiver", "Printemps", "Été", "Automne"]
+        out = [Dict("season" => s, "count" => 0) for s in order]
+        for r in eachrow(g)
+            idx = findfirst(==(r.season), order)
+            idx === nothing && continue
+            out[idx]["count"] = Int(r.count)
+        end
+
+        return respond_json(out)
+    end
+
+    # ---- ecosystems ----
     route("/api/ecosystems") do
         p = params()
 
@@ -370,20 +532,21 @@ function setup_api_routes()
         if run === nothing
             run = latest_cluster_run()
         end
-        run === nothing && return HTTP.Response(404, ["Content-Type" => "text/plain; charset=utf-8"], "No cluster runs found")
+        run === nothing && return HTTP.Response(404, ["Content-Type" => "text/plain; charset=utf-8"],
+                                               "No cluster runs found")
 
-        data = load_ecosystems_cached(run)
-        data === nothing && return HTTP.Response(404, ["Content-Type" => "text/plain; charset=utf-8"], "No GeoJSON found for run=$run")
+        data = load_ecosystems_cached(string(run))
+        data === nothing && return HTTP.Response(404, ["Content-Type" => "text/plain; charset=utf-8"],
+                                                "No GeoJSON found for run=$run")
 
         feats = data.feats
         bboxes = data.bboxes
 
-        # Optional bbox filter: bbox=lon1,lat1,lon2,lat2
         if phaskey(p, "bbox")
-            vals = split(string(pget(p, "bbox")), ",")
-            if length(vals) == 4
-                lon1, lat1, lon2, lat2 = parse.(Float64, vals)
-                q = (min(lon1, lon2), min(lat1, lat2), max(lon1, lon2), max(lat1, lat2))
+            f = parse_filters(p)
+            if haskey(f, :bbox)
+                q = f[:bbox]  # (lon_min, lat_min, lon_max, lat_max)
+                qbb = (q[1], q[2], q[3], q[4])
 
                 filtered = Any[]
                 sizehint!(filtered, min(length(feats), 2000))
@@ -391,33 +554,21 @@ function setup_api_routes()
                 for i in eachindex(feats)
                     bb = bboxes[i]
                     bb === nothing && continue
-                    if bbox_intersects(bb, q)
+                    if bbox_intersects(bb, qbb)
                         push!(filtered, feats[i])
                     end
                 end
 
-                out = Dict(
-                    "type" => "FeatureCollection",
-                    "features" => filtered
-                )
-
-                return HTTP.Response(
-                    200,
+                out = Dict("type" => "FeatureCollection", "features" => filtered)
+                return HTTP.Response(200,
                     ["Content-Type" => "application/geo+json; charset=utf-8"],
                     JSON3.write(out)
                 )
             end
-            # If bbox malformed, just fall through to full
         end
 
-        # No bbox -> full FeatureCollection (still cached, no re-parse)
-        out = Dict(
-            "type" => "FeatureCollection",
-            "features" => feats
-        )
-
-        return HTTP.Response(
-            200,
+        out = Dict("type" => "FeatureCollection", "features" => feats)
+        return HTTP.Response(200,
             ["Content-Type" => "application/geo+json; charset=utf-8"],
             JSON3.write(out)
         )
@@ -425,7 +576,6 @@ function setup_api_routes()
 
     route("/api/runs") do
         runs = list_cluster_runs()
-        # array response, as requested
         return [Dict("run" => r) for r in runs]
     end
 
@@ -434,50 +584,9 @@ function setup_api_routes()
         r === nothing ? [] : [Dict("run" => r)]
     end
 
-    route("/api/summary") do
-        p= params()
-        f = parse_filters(p)
-
-        df = apply_filters(OBS, f)
-
-        metrics = Vector{Dict}()
-
-        push!(metrics, Dict("metric" => "observations", "value" => nrow(df)))
-        push!(metrics, Dict("metric" => "unique_taxa", "value" => length(unique(df.taxon_id))))
-        push!(metrics, Dict("metric" => "clusters", "value" => length(unique(df.cluster_id))))
-
-        if :elevation_m in names(df) && nrow(df) > 0
-            push!(metrics, Dict("metric" => "elevation_min", "value" => minimum(df.elevation_m)))
-            push!(metrics, Dict("metric" => "elevation_mean", "value" => mean(df.elevation_m)))
-            push!(metrics, Dict("metric" => "elevation_max", "value" => maximum(df.elevation_m)))
-        end
-
-        return respond_json(metrics)
-    end
-
-
-
-
-    # --- Seasonal trends ---
-    route("/api/trends/seasonal") do
-        p = params()
-        taxon = try
-            parse(Int, get(p, "taxon_id", "0"))
-        catch
-            0
-        end
-
-        sub = taxon == 0 ? OBS : OBS[OBS.taxon_id .== taxon, :]
-        g = combine(groupby(sub, :month), nrow => :count)
-        sort!(g, :month)
-        respond_json(g)
-    end
-
-    # --- Raw observations for map ---
+    # ---- raw observations ----
     route("/api/observations") do
-        p = params()
-        f = parse_filters(p)
-
+        f = parse_filters(params())
         df = apply_filters(OBS, f)
 
         return [
@@ -495,9 +604,6 @@ function setup_api_routes()
         ]
     end
 
-
-
-
-end # function setup_api_routes
+end # setup_api_routes
 
 end # module

@@ -147,23 +147,116 @@ function commonFilterParams() {
 // Plotly charts (unchanged)
 // =====================
 
+function dfjsonCol(data, key) {
+    const names = data?.colindex?.names;
+    const cols = data?.columns;
+    if (!Array.isArray(names) || !Array.isArray(cols)) return null;
+    const i = names.indexOf(key);
+    if (i < 0) return null;
+    return cols[i] || null;
+}
+
 function extractXY(data, xKey, yKey) {
     if (!data) return { x: [], y: [] };
 
     if (Array.isArray(data)) {
-        return {
-            x: data.map((row) => row[xKey]),
-            y: data.map((row) => row[yKey]),
-        };
+        return { x: data.map(r => r?.[xKey]), y: data.map(r => r?.[yKey]) };
     }
 
-    if (data[xKey] && data[yKey]) {
+    if (Array.isArray(data[xKey]) && Array.isArray(data[yKey])) {
         return { x: data[xKey], y: data[yKey] };
     }
+
+    // DataFrames.jl JSON style
+    const x = dfjsonCol(data, xKey);
+    const y = dfjsonCol(data, yKey);
+    if (Array.isArray(x) && Array.isArray(y)) return { x, y };
 
     console.warn("Unexpected data format:", data);
     return { x: [], y: [] };
 }
+
+function renderAnnualWithFits(data) {
+    const { x, y } = extractXY(data, "year", "count");
+
+    const trace = {
+        x, y,
+        mode: "lines+markers",
+        hovertemplate: "Année %{x}<br>Observations %{y}<extra></extra>",
+    };
+
+    Plotly.newPlot("annual-chart", [trace], {
+        title: { text: "Évolution annuelle", font: { size: 14 } },
+        margin: { l: 40, r: 10, t: 30, b: 40 },
+        xaxis: { title: "Année" },
+        yaxis: { title: "Nombre d'observations" },
+    }, { displaylogo: false, responsive: true });
+}
+
+function renderNormalized(data) {
+    // Depending on your backend, keys might be year + value, or year + count_norm, etc.
+    // Try common choices:
+    let xy = extractXY(data, "year", "value");
+    if (xy.x.length === 0) xy = extractXY(data, "year", "count");
+    if (xy.x.length === 0) xy = extractXY(data, "year", "normalized");
+
+    const trace = {
+        x: xy.x, y: xy.y,
+        mode: "lines+markers",
+        hovertemplate: "Année %{x}<br>Valeur %{y}<extra></extra>",
+    };
+
+    Plotly.newPlot("normalized-chart", [trace], {
+        title: { text: "Évolution annuelle normalisée", font: { size: 14 } },
+        margin: { l: 40, r: 10, t: 30, b: 40 },
+        xaxis: { title: "Année" },
+        yaxis: { title: "Valeur normalisée" },
+    }, { displaylogo: false, responsive: true });
+}
+
+function renderMonthlyBoxplot(data) {
+    // Expecting columns like year, month, count (or similar). Adjust as needed.
+    const months = dfjsonCol(data, "month") || [];
+    const values = dfjsonCol(data, "count") || dfjsonCol(data, "value") || [];
+    const trace = { x: months, y: values, type: "box" };
+
+    Plotly.newPlot("boxplot-chart", [trace], {
+        title: { text: "Distribution mensuelle", font: { size: 14 } },
+        margin: { l: 40, r: 10, t: 30, b: 40 },
+        xaxis: { title: "Mois" },
+        yaxis: { title: "Observations" },
+    }, { displaylogo: false, responsive: true });
+}
+
+function renderMonthlyECDF(data) {
+    // Minimal: plot histogram/line depending on payload
+    const { x, y } = extractXY(data, "month", "count");
+    Plotly.newPlot("ecdf-chart", [{
+        x, y, mode: "lines",
+        hovertemplate: "Mois %{x}<br>%{y}<extra></extra>",
+    }], {
+        title: { text: "ECDF mensuelle", font: { size: 14 } },
+        margin: { l: 40, r: 10, t: 30, b: 40 },
+        xaxis: { title: "Mois", tickmode: "linear", dtick: 1 },
+        yaxis: { title: "Valeur" },
+    }, { displaylogo: false, responsive: true });
+}
+
+function renderSeasonProfile(data) {
+    const { x, y } = extractXY(data, "month", "count");
+    Plotly.newPlot("season-profile-chart", [{
+        x, y, type: "bar",
+        hovertemplate: "Mois %{x}<br>Observations %{y}<extra></extra>",
+    }], {
+        title: { text: "Profil saisonnier", font: { size: 14 } },
+        margin: { l: 40, r: 10, t: 30, b: 40 },
+        xaxis: { title: "Mois", tickmode: "linear", dtick: 1 },
+        yaxis: { title: "Nombre d'observations" },
+    }, { displaylogo: false, responsive: true });
+}
+
+
+
 
 function renderAnnualChart(data, taxonId) {
     const { x, y } = extractXY(data, "year", "count");
@@ -345,15 +438,18 @@ function visibleTiles(z) {
 function unloadTilesNotVisible(visibleSet) {
     for (const [key, layer] of activeTileLayers.entries()) {
         if (!visibleSet.has(key)) {
-            mapInstance.removeLayer(layer);
+            pointsGroup?.removeLayer(layer);
             activeTileLayers.delete(key);
         }
     }
 }
 
+
 async function loadTile(z, x, y) {
     const key = zxyKey(z, x, y);
     if (activeTileLayers.has(key)) return;
+
+    const myEpoch = tilesEpoch;
 
     const url = TILE_URL_TEMPLATE
         .replace("{z}", z)
@@ -363,11 +459,13 @@ async function loadTile(z, x, y) {
     // Ensure a controller exists for this batch
     if (!tilesInFlight) tilesInFlight = new AbortController();
     try {
+
+
         const resp = await fetch(url, { signal: tilesInFlight.signal });
         if (!resp.ok) return;
 
         // If user switched mode while we were loading, ignore
-        if (tilesEpoch !== tilesEpoch) return;
+        if (myEpoch !== tilesEpoch) return;
 
         const buf = await resp.arrayBuffer();
         const ungz = pako.ungzip(new Uint8Array(buf), { to: "string" });
@@ -384,13 +482,28 @@ async function loadTile(z, x, y) {
                 geojson = { type: "FeatureCollection", features: feats };
             }
         }
-        L.canvas({ padding: 0.5 });
+        const canvasRenderer = L.canvas({ padding: 0.5 });
+
         const layer = L.geoJSON(geojson, {
             interactive: false,
+            pointToLayer: (_feat, latlng) =>
+                L.circleMarker(latlng, {
+                    renderer: canvasRenderer,
+                    radius: 2,
+                    weight: 0,
+                    fillOpacity: 0.55,
+                }),
         });
+
 
         // Add to pointsGroup (NOT directly to map)
         ensurePointsGroup().addLayer(layer);
+
+        if (myEpoch !== tilesEpoch) {
+            pointsGroup.removeLayer(layer);
+            return;
+        }
+
 
         // If group isn't on the map anymore, remove immediately
         if (!mapInstance.hasLayer(pointsGroup)) {
@@ -441,6 +554,20 @@ function tileToLonLat(x, y, z) {
 
     return [lat, lon];
 }
+
+function syncTaxonFromUI() {
+    const input = document.getElementById("taxon-id-input");
+    const raw = (input?.value || "").trim();
+    if (!raw) {
+        state.filters.taxon_id = null;
+        currentTaxonFilter = null;
+        return;
+    }
+    const n = Number(raw);
+    state.filters.taxon_id = Number.isFinite(n) ? n : null;
+    currentTaxonFilter = Number.isFinite(n) ? n : null;
+}
+
 
 function computeGridZ() {
     // Grid should be slightly coarser than point tiles to keep it light
@@ -746,6 +873,96 @@ async function applyDisplayMode(mode) {
     refreshActiveLayers();
 }
 
+state.graphs = {
+    enabled: new Set(["annual", "normalized"]), // défaut
+};
+
+function readGraphToggles() {
+    const els = document.querySelectorAll(".graph-toggle");
+    const next = new Set();
+    els.forEach((el) => {
+        if (el.checked) next.add(el.value);
+    });
+    state.graphs.enabled = next;
+}
+
+let graphsInFlight = null;
+
+const refreshGraphsDebounced = debounce(async () => {
+    try {
+        if (!mapInstance) return;
+
+        // bbox obligatoire
+        state.viewport.bbox = getBboxStringFromMap(mapInstance);
+
+        // sync selection
+        syncTaxonFromUI()
+        readGraphToggles();
+
+        const enabled = state.graphs.enabled;
+        if (enabled.size === 0) return;
+
+        // cancel previous batch
+        if (graphsInFlight) graphsInFlight.abort();
+        graphsInFlight = new AbortController();
+
+        syncTaxonFromUI()
+        // Requête params communs
+        const qs = buildQuery({
+            ...commonFilterParams(),
+            bbox: state.viewport.bbox,
+        });
+
+        // 1) Annual (counts) + fits client-side
+        if (enabled.has("annual")) {
+            const annual = await fetchJson(`/api/plots/annual${qs}`, { signal: graphsInFlight.signal });
+            renderAnnualWithFits(annual, state.filters.taxon_id); // reuse existing renderer
+        } else {
+            Plotly.purge("annual-chart");
+        }
+
+
+        // 2) Normalisé
+        if (enabled.has("normalized")) {
+            const norm = await fetchJson(`/api/plots/annual_normalized${qs}`, { signal: graphsInFlight.signal });
+            renderNormalized(norm);
+        } else {
+            Plotly.purge("normalized-chart");
+        }
+
+        // 3) Boxplot mensuel
+        if (enabled.has("boxplot")) {
+            const m = await fetchJson(`/api/plots/monthly_yearly${qs}`, { signal: graphsInFlight.signal });
+            renderMonthlyBoxplot(m);
+        } else {
+            Plotly.purge("boxplot-chart");
+        }
+
+        // 4) ECDF
+        if (enabled.has("ecdf")) {
+            const mh = await fetchJson(`/api/plots/month_hist${qs}`, { signal: graphsInFlight.signal });
+            renderMonthlyECDF(mh);
+        } else {
+            Plotly.purge("ecdf-chart");
+        }
+
+        // 5) Profil saisonnier
+        if (enabled.has("season")) {
+            const s = await fetchJson(`/api/plots/season_profile${qs}`, { signal: graphsInFlight.signal });
+            renderSeasonProfile(s, state.filters.taxon_id);
+        } else {
+            Plotly.purge("seasonal-chart");
+        }
+
+    } catch (e) {
+        if (e?.name === "AbortError") return;
+        console.error(e);
+        // ne pas casser l’UI; au pire tu mets un status “Erreur graph”
+    }
+}, 250);
+
+
+
 
 // =====================
 // Map init
@@ -777,6 +994,7 @@ function initMap() {
         if (mode === "ecosystems" || mode === "both") refreshEcosystemsDebounced();
 
         refreshSummaryDebounced();
+        refreshGraphsDebounced();
     });
 
     return mapInstance;
@@ -789,6 +1007,14 @@ function initMap() {
 
 document.addEventListener("DOMContentLoaded", () => {
     initMap();
+
+    document.querySelectorAll(".graph-toggle").forEach((cb) => {
+        cb.addEventListener("change", () => {
+            refreshGraphsDebounced();
+        });
+    });
+
+
 
     // default mode: grid
     const displaySelect = document.getElementById("display-mode");
@@ -813,4 +1039,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Initial load: trends + refresh layers
     loadTrends();
+    refreshGraphsDebounced();
+
 });
