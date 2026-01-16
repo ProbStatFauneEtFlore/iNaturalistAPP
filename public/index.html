@@ -13,8 +13,306 @@
             crossorigin=""
     />
 
-    <!-- App theme (separate file) -->
+    <!-- App styles (keep your existing theme) -->
     <link rel="stylesheet" href="/static/css/style.css" />
+
+    <style>
+        /* =========================================================
+           Layout / Shell
+           ========================================================= */
+        html, body { height: 100%; margin: 0; }
+
+        :root{
+            --panel-bg: rgba(255,255,255,0.92);
+            --panel-border: rgba(255,255,255,0.22);
+            --panel-shadow: 0 10px 30px rgba(0,0,0,0.25);
+            --text-dark: #111827;
+            --text-mid: rgba(17,24,39,0.72);
+            --chip-bg: rgba(17,24,39,0.06);
+        }
+
+        body{
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+        }
+
+        .app-shell{
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        /* =========================================================
+           Header (sticky, compact, clean)
+           ========================================================= */
+        .app-header{
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.18);
+            background: rgba(5,5,26,0.65);
+            backdrop-filter: blur(10px);
+        }
+
+        .title-block{
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 220px;
+        }
+
+        .title-block h1{
+            margin: 0;
+            font-size: 1.05rem;
+            letter-spacing: 0.2px;
+            color: rgba(245,246,255,0.98);
+            line-height: 1.1;
+            font-weight: 700;
+        }
+
+        .title-block p{
+            margin: 0;
+            font-size: 0.82rem;
+            color: rgba(245,246,255,0.72);
+        }
+
+        /* =========================================================
+           Controls card
+           ========================================================= */
+        .controls{
+            display: flex;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            gap: 10px 12px;
+            margin: 0;
+            padding: 10px 12px;
+            border-radius: 14px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            box-shadow: var(--panel-shadow);
+            max-width: 100%;
+        }
+
+        .field{
+            display: grid;
+            gap: 6px;
+            min-width: 160px;
+        }
+
+        .field label{
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            font-size: 0.75rem;
+            color: var(--text-dark);
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .field label small{
+            font-weight: 600;
+            color: var(--text-mid);
+            background: var(--chip-bg);
+            border-radius: 999px;
+            padding: 2px 8px;
+            line-height: 1.2;
+        }
+
+        .field input,
+        .field select{
+            appearance: none;
+            border: 1px solid rgba(17,24,39,0.12);
+            border-radius: 12px;
+            padding: 8px 10px;
+            font-size: 0.9rem;
+            color: #111827;
+            background: rgba(255,255,255,0.98);
+            outline: none;
+        }
+
+        .field input:focus,
+        .field select:focus{
+            border-color: rgba(79,140,255,0.65);
+            box-shadow: 0 0 0 4px rgba(79,140,255,0.18);
+        }
+
+        .actions{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-left: 6px;
+        }
+
+        .btn{
+            border: none;
+            border-radius: 999px;
+            padding: 9px 14px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 700;
+            color: white;
+            background: rgba(79,140,255,0.95);
+            box-shadow: 0 10px 22px rgba(79,140,255,0.35);
+            transition: transform 0.08s ease, box-shadow 0.08s ease;
+            white-space: nowrap;
+        }
+
+        .btn:hover{
+            transform: translateY(-1px);
+            box-shadow: 0 14px 28px rgba(79,140,255,0.45);
+        }
+
+        .btn:active{
+            transform: translateY(0);
+            box-shadow: 0 8px 18px rgba(79,140,255,0.32);
+        }
+
+        .status-pill{
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border-radius: 999px;
+            padding: 8px 10px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #111827;
+            background: rgba(17,24,39,0.06);
+            border: 1px solid rgba(17,24,39,0.08);
+            min-height: 36px;
+            white-space: nowrap;
+        }
+
+        .status-dot{
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: rgba(17,24,39,0.35);
+            box-shadow: 0 0 0 3px rgba(17,24,39,0.08);
+            flex: 0 0 auto;
+        }
+
+        /* Hook into your existing JS status types */
+        #status-message.error .status-dot{ background: #ff6f91; box-shadow: 0 0 0 3px rgba(255,111,145,0.18); }
+        #status-message.success .status-dot{ background: #6fffc6; box-shadow: 0 0 0 3px rgba(111,255,198,0.18); }
+
+        /* =========================================================
+           Main grid
+           ========================================================= */
+        .app-main{
+            flex: 1;
+            min-height: 0;
+            display: grid;
+            grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+            gap: 14px;
+            padding: 14px 16px 16px;
+        }
+
+        .panel{
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 16px 40px rgba(0,0,0,0.35);
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.95);
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .panel-header{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 12px;
+            border-bottom: 1px solid rgba(17,24,39,0.08);
+            background: rgba(255,255,255,0.98);
+        }
+
+        .panel-header h2{
+            margin: 0;
+            font-size: 0.95rem;
+            font-weight: 800;
+            color: #111827;
+        }
+
+        .panel-sub{
+            margin: 0;
+            font-size: 0.78rem;
+            color: rgba(17,24,39,0.62);
+        }
+
+        /* Map */
+        #map{
+            width: 100%;
+            height: 100%;
+            min-height: 320px;
+            flex: 1;
+        }
+
+        /* Charts */
+        .charts{
+            display: grid;
+            grid-template-rows: auto 1fr 1fr; /* summary + 2 charts */
+            gap: 12px;
+            padding: 12px;
+            min-height: 0;
+            background: rgba(255,255,255,0.94);
+            overflow: auto; /* important: allow scrolling if panel is short */
+        }
+
+
+        .chart-card{
+            border-radius: 12px;
+            border: 1px solid rgba(17,24,39,0.08);
+            background: rgba(255,255,255,0.98);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .chart-title{
+            padding: 10px 10px 8px;
+            border-bottom: 1px solid rgba(17,24,39,0.06);
+        }
+
+        .chart-title h3{
+            margin: 0;
+            font-size: 0.9rem;
+            font-weight: 800;
+            color: #111827;
+        }
+
+        .chart-title p{
+            margin: 2px 0 0;
+            font-size: 0.78rem;
+            color: rgba(17,24,39,0.62);
+        }
+
+        .chart{
+            flex: 1;
+            min-height: 0;
+        }
+
+        /* Leaflet popup readability */
+        .leaflet-popup-content{
+            font: 14px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+        }
+
+        /* Responsive: stack charts under map on small screens */
+        @media (max-width: 980px){
+            .app-main{
+                grid-template-columns: 1fr;
+            }
+            .title-block{ min-width: 0; }
+            .controls{ width: 100%; }
+        }
+    </style>
 
     <!-- Plotly for charts -->
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
@@ -31,80 +329,52 @@
 
     <!-- Main app -->
     <script defer src="/static/js/app.js"></script>
-
-    <!-- Small UI-only script for layout/accordion (does not touch your data logic) -->
-    <script defer>
-        window.addEventListener("DOMContentLoaded", () => {
-            const btn = document.getElementById("toggle-layout");
-            if (btn) {
-                btn.addEventListener("click", () => {
-                    document.body.classList.toggle("focus-graphs");
-                    btn.setAttribute(
-                        "aria-pressed",
-                        document.body.classList.contains("focus-graphs") ? "true" : "false"
-                    );
-                });
-            }
-
-            // Optional: single-open accordion for charts
-            document.querySelectorAll("details.card").forEach((d) => {
-                d.addEventListener("toggle", () => {
-                    if (!d.open) return;
-                    document.querySelectorAll("details.card").forEach((other) => {
-                        if (other !== d) other.open = false;
-                    });
-                });
-            });
-        });
-    </script>
 </head>
 
 <body>
 <div class="app-shell">
     <!-- Header -->
     <header class="app-header">
-        <div class="brand">
-            <div class="brand-mark" aria-hidden="true">
-                <span class="leaf"></span>
-                <span class="leaf leaf-2"></span>
-                <span class="dot"></span>
-            </div>
-            <div class="brand-text">
-                <h1>Faune &amp; Flore – Suisse</h1>
-                <p>Explorateur d’observations iNaturalist (carte + analyses)</p>
-            </div>
+        <div class="title-block">
+            <h1>Faune &amp; Flore – Suisse</h1>
+            <p>Explorateur d'observations iNaturalist</p>
         </div>
 
         <form class="controls" id="controls">
             <div class="field">
-                <label for="taxon-id-input">Taxon ID <small>vide = tous</small></label>
-                <input id="taxon-id-input" type="text" placeholder="ex: 123456" autocomplete="off" />
+                <label for="taxon-id-input">
+                    Taxon ID <small>vide = tous</small>
+                </label>
+                <input
+                        id="taxon-id-input"
+                        type="text"
+                        placeholder="ex: 123456"
+                        autocomplete="off"
+                />
             </div>
 
             <div class="field">
-                <label for="display-mode">Affichage <small>couches</small></label>
+                <label for="display-mode">
+                    Affichage <small>couches</small>
+                </label>
                 <select id="display-mode">
                     <option value="grid" selected>Grille</option>
                     <option value="points">Points</option>
                     <option value="ecosystems">Écosystèmes</option>
                     <option value="both">Les deux</option>
                 </select>
+
+
+
             </div>
 
             <div class="actions">
-                <button id="load-trends-btn" type="submit" class="btn primary">Charger tendances</button>
-
-                <button
-                        id="toggle-layout"
-                        type="button"
-                        class="btn ghost"
-                        aria-pressed="false"
-                        title="Réduit la carte et agrandit les graphes"
-                >
-                    Focus graphes
+                <button id="load-trends-btn" type="submit" class="btn">
+                    Charger tendances
                 </button>
 
-                <span id="status-message" class="status-pill" role="status" aria-live="polite">
+                <!-- Status pill matches your existing JS: it toggles classes error/success on #status-message -->
+                <span id="status-message" class="status-pill">
             <span class="status-dot" aria-hidden="true"></span>
             <span class="status-text">OK</span>
           </span>
@@ -114,66 +384,29 @@
 
     <!-- Main -->
     <main class="app-main">
-        <!-- Map (compact by design) -->
-        <section class="panel map-panel">
+        <!-- Map panel -->
+        <section class="panel">
             <div class="panel-header">
                 <div>
                     <h2>Carte</h2>
-                    <p class="panel-sub">Navigation + couches (points, grille, écosystèmes)</p>
-                </div>
-                <div class="panel-badges" aria-hidden="true">
-                    <span class="badge">Viewport</span>
-                    <span class="badge">Leaflet</span>
+                    <p class="panel-sub">Navigation + couches (points, écosystèmes)</p>
                 </div>
             </div>
-            <div id="map" class="map-canvas"></div>
+            <div id="map"></div>
         </section>
 
-        <!-- Analyses -->
-        <aside class="panel analytics-panel">
+        <!-- Charts panel -->
+        <aside class="panel">
             <div class="panel-header">
                 <div>
                     <h2>Analyses</h2>
-                    <p class="panel-sub">Statistiques et graphes calculés sur la zone visible (bbox)</p>
-                </div>
-                <div class="panel-badges" aria-hidden="true">
-                    <span class="badge">Plotly</span>
-                    <span class="badge badge-plant">Bio</span>
+                    <p class="panel-sub">Tendances annuelles et saisonnières</p>
                 </div>
             </div>
 
-            <div class="side">
-                <!-- Settings -->
-                <section class="card sticky" id="graph-settings-card">
-                    <div class="card-head">
-                        <h3>Graphes</h3>
-                        <p>Choisir les visualisations (viewport). Exactement les 5 graphes du notebook.</p>
-                    </div>
-
-                    <div class="graph-choices">
-                        <label><input class="graph-toggle" type="checkbox" value="annual" checked /> Annuel</label>
-                        <label><input class="graph-toggle" type="checkbox" value="normalized" checked /> Normalisé / année</label>
-                        <label><input class="graph-toggle" type="checkbox" value="boxplot" /> Boxplot mensuel</label>
-                        <label><input class="graph-toggle" type="checkbox" value="ecdf" /> ECDF mensuelle</label>
-                        <label><input class="graph-toggle" type="checkbox" value="season" /> Profil saisonnier</label>
-                    </div>
-
-                    <div class="graph-actions">
-                        <div class="inline">
-                            Live
-                            <select id="graphs-live">
-                                <option value="on" selected>On</option>
-                                <option value="off">Off</option>
-                            </select>
-                        </div>
-
-                        <button id="refresh-graphs-btn" type="button" class="btn primary">Mettre à jour</button>
-                    </div>
-                </section>
-
-                <!-- Summary -->
-                <section class="card sticky-2" id="summary-card">
-                    <div class="card-head">
+            <div class="charts">
+                <div class="chart-card" id="summary-card">
+                    <div class="chart-title">
                         <h3>Résumé (zone visible)</h3>
                         <p>Statistiques calculées sur la bbox affichée</p>
                     </div>
@@ -186,48 +419,24 @@
                         <div class="summary-row"><span>Altitude moyenne</span><strong id="m-elevation_mean">—</strong></div>
                         <div class="summary-row"><span>Altitude max</span><strong id="m-elevation_max">—</strong></div>
                     </div>
-                </section>
+                </div>
 
-                <!-- Charts -->
-                <details class="card" id="card-annual" open>
-                    <summary class="card-head">
+
+                <div class="chart-card">
+                    <div class="chart-title">
                         <h3>Évolution annuelle</h3>
-                        <p>Nombre d’observations par année (viewport)</p>
-                    </summary>
+                        <p>Nombre d'observations par année</p>
+                    </div>
                     <div id="annual-chart" class="chart"></div>
-                </details>
+                </div>
 
-                <details class="card" id="card-normalized">
-                    <summary class="card-head">
-                        <h3>Normalisé / année</h3>
-                        <p>Proportion du taxon parmi toutes les observations (viewport)</p>
-                    </summary>
-                    <div id="normalized-chart" class="chart"></div>
-                </details>
-
-                <details class="card" id="card-boxplot">
-                    <summary class="card-head">
-                        <h3>Boxplot mensuel</h3>
-                        <p>Distribution des counts mensuels (across years)</p>
-                    </summary>
-                    <div id="boxplot-chart" class="chart"></div>
-                </details>
-
-                <details class="card" id="card-ecdf">
-                    <summary class="card-head">
-                        <h3>ECDF mensuelle</h3>
-                        <p>Cumul des observations selon le mois</p>
-                    </summary>
-                    <div id="ecdf-chart" class="chart"></div>
-                </details>
-
-                <details class="card" id="card-season">
-                    <summary class="card-head">
-                        <h3>Profil saisonnier</h3>
-                        <p>Total par saison (viewport)</p>
-                    </summary>
-                    <div id="season-profile-chart" class="chart"></div>
-                </details>
+                <div class="chart-card">
+                    <div class="chart-title">
+                        <h3>Évolution saisonnière</h3>
+                        <p>Répartition mensuelle des observations</p>
+                    </div>
+                    <div id="seasonal-chart" class="chart"></div>
+                </div>
             </div>
         </aside>
     </main>

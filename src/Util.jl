@@ -4,10 +4,8 @@ using HTTP, JSON3
 
 export respond_json, mime_of
 
-function respond_json(x; code::Integer = 200, headers=Pair{String,String}[])
-    base = ["Content-Type" => "application/json; charset=utf-8"]
-    return HTTP.Response(code, vcat(base, headers), JSON3.write(x))
-end
+respond_json(x) =
+    HTTP.Response(200, ["Content-Type" => "application/json"], JSON3.write(x))
 
 function mime_of(rel::AbstractString)
     endswith(rel, ".css")  && return "text/css; charset=utf-8"
